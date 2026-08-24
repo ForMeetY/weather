@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.weathershow.mapper.WeatherDwdMapper">
+
+    <select id="getDiurnalCorrelation" resultType="com.example.weathershow.pojo.DistributionCorrelationVo">
+        SELECT
+        DATE_FORMAT(record_date, '%Y-%m') AS monthDimension,
+        AVG(avg_temp)      AS avgTemp,
+        AVG(daily_range)   AS avgDailyRange,
+        MAX(season)        AS season
+        FROM weather_dwd
+        GROUP BY DATE_FORMAT(record_date, '%Y-%m')
+        ORDER BY monthDimension ASC
+    </select>
+    <select id="getDiurnalMonthly" resultType="com.example.weathershow.pojo.DistributionMonthlyVo">
+        SELECT
+        DATE_FORMAT(record_date, '%Y-%m') AS monthDimension,
+        AVG(daily_range)    AS avgDailyRange,
+        MAX(daily_range)    AS maxDailyRange,
+        MIN(daily_range)    AS minDailyRange,
+        STDDEV(daily_range) AS stdDailyRange
+        FROM weather_dwd
+        GROUP BY DATE_FORMAT(record_date, '%Y-%m')
+        ORDER BY monthDimension ASC
+    </select>
+    <select id="getDiurnalSeason" resultType="com.example.weathershow.pojo.DistributionSeason">
+        SELECT
+        season,
+        AVG(daily_range)  AS avgDailyRange,
+        MAX(daily_range)  AS maxDailyRange,
+        MIN(daily_range)  AS minDailyRange,
+        AVG(CASE WHEN pct BETWEEN 0.24 AND 0.26 THEN daily_range END) AS q1,
+        AVG(CASE WHEN pct BETWEEN 0.49 AND 0.51 THEN daily_range END) AS median,
+        AVG(CASE WHEN pct BETWEEN 0.74 AND 0.76 THEN daily_range END) AS q3
+        FROM (
+        SELECT
+        season,
+        daily_range,
+        PERCENT_RANK() OVER (PARTITION BY season ORDER BY daily_range) AS pct
+        FROM weather_dwd
+        ) ranked
+        GROUP BY season
+        ORDER BY FIELD(season, '春', '夏', '秋', '冬')
+    </select>
+</mapper>

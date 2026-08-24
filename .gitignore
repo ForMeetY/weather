@@ -1,0 +1,28 @@
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# 构建产物
+target/
+build/
+dist/
+node_modules/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 数据文件
+*.csv
+*.xlsx
+*.zip
+
+# 日志
+*.log
+
+# 本地敏感配置 / 环境变量
+.env
+.env.local

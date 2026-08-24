@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.weathershow.mapper.WeatherForecastMapper">
+
+
+    <select id="queryAll" resultType="com.example.weathershow.pojo.WeatherForecast">
+        select
+        ds,
+        yhat,
+        yhat_lower,
+        yhat_upper
+        from
+        ads_weather_forecast
+        order by ds ASC
+    </select>
+</mapper>

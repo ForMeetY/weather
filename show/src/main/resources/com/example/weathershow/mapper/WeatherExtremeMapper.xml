@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.weathershow.mapper.WeatherExtremeMapper">
+    <select id="queryAllGroupByYearAndType" resultType="com.example.weathershow.pojo.WeatherExtreme">
+        SELECT
+        year,
+        extreme_type AS extremeType,
+        SUM(occurrence_count) AS totalCount,
+        AVG(threshold_value) AS thresholdValue
+        FROM ads_weather_extreme
+        GROUP BY year, extreme_type
+        ORDER BY year ASC
+    </select>
+    <select id="getExtremeBySeason" resultType="com.example.weathershow.pojo.SeasonExtremeVo">
+        SELECT
+        season,
+        SUM(CASE WHEN extreme_type = 'EXTREME_HIGH' THEN occurrence_count ELSE 0 END) AS highCount,
+        SUM(CASE WHEN extreme_type = 'EXTREME_LOW'  THEN occurrence_count ELSE 0 END) AS lowCount,
+        ROUND(AVG(CASE WHEN extreme_type = 'EXTREME_HIGH' THEN avg_intensity END), 3) AS highAvgIntensity,
+        ROUND(AVG(CASE WHEN extreme_type = 'EXTREME_LOW'  THEN avg_intensity END), 3) AS lowAvgIntensity
+        FROM
+        ads_weather_extreme
+        GROUP BY season
+        ORDER BY FIELD(season, '春', '夏', '秋', '冬')
+    </select>
+    <select id="getExtremeByMonth" resultType="com.example.weathershow.pojo.WeatherExtreme">
+        SELECT
+        year,
+        month,
+        season,
+        extreme_type AS extremeType,
+        SUM(occurrence_count) AS occurrenceCount
+        FROM ads_weather_extreme
+        GROUP BY year, month, extreme_type
+        ORDER BY year ASC, month ASC
+    </select>
+    <select id="getYearlyAvgIntensity" resultType="com.example.weathershow.pojo.WeatherExtreme">
+        SELECT
+        year,
+        extreme_type      AS extremeType,
+        ROUND(AVG(avg_intensity), 4) AS avgIntensity
+        FROM
+        ads_weather_extreme
+        GROUP BY year, extreme_type
+        ORDER BY year, extreme_type
+    </select>
+    <select id="getYearlyCountByType" resultType="com.example.weathershow.pojo.WeatherExtreme">
+        SELECT
+        year,
+        extreme_type            AS extremeType,
+        SUM(occurrence_count)   AS totalCount
+        FROM
+        ads_weather_extreme
+        GROUP BY year, extreme_type
+        ORDER BY year, extreme_type
+    </select>
+    <!-- 月度偏差 -->
+    <select id="getMonthlyAvgIntensity" resultType="com.example.weathershow.pojo.WeatherExtreme">
+        SELECT
+        year,
+        month,
+        extreme_type          AS extremeType,
+        ROUND(AVG(avg_intensity), 4) AS avgIntensity
+        FROM ads_weather_extreme
+        GROUP BY year, month, extreme_type
+        ORDER BY year ASC, month ASC
+    </select>
+
+</mapper>
