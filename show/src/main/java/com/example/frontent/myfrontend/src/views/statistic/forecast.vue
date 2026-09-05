@@ -26,15 +26,15 @@ onMounted(async () => {
     <div class="metrics-grid">
       <div class="metric-card">
         <div class="label">MAE (平均绝对误差)</div>
-        <div class="value">3.18 <small>℃</small></div>
+        <div class="value">3.168 <small>℃</small></div>
       </div>
       <div class="metric-card">
         <div class="label">RMSE (均方根误差)</div>
-        <div class="value">4.03 <small>℃</small></div>
+        <div class="value">4.019 <small>℃</small></div>
       </div>
       <div class="metric-card">
         <div class="label">置信区间覆盖率</div>
-        <div class="value">92.61 <small>%</small></div>
+        <div class="value">92.74 <small>%</small></div>
       </div>
     </div>
 
@@ -45,6 +45,11 @@ onMounted(async () => {
         :actualData="actualData"
       />
     </div>
+
+    <div class="section-title">短期预测（气候态 + 异常AR(1)）—— 2024 年滚动回测</div>
+    <div class="chart-card">
+      <shortChart />
+    </div>
   </div>
 </template>
 
@@ -53,6 +58,15 @@ onMounted(async () => {
   padding: 20px;
   background-color: #0f172a; /*深蓝黑 */
   border-radius: 12px;
+}
+
+.section-title {
+  color: #e2e8f0;
+  font-size: 16px;
+  font-weight: 600;
+  margin: 28px 0 14px 0;
+  padding-left: 10px;
+  border-left: 4px solid #d85a30;
 }
 
 .metrics-grid {

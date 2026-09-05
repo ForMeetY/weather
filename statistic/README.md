@@ -1,274 +1,174 @@
-# 呼和浩特市气温数据挖掘与趋势分析
+# statistic —— 数仓分层 ETL 模块（Spark / Scala）
 
-[TOC]
-
-
-
-## 一、数据库规划
-
-> 数据库分为三层
+> 本模块是整个系统的**数据治理与多维统计层**：把 MySQL 中的原始气温明细（ODS）经 Spark 清洗、
+> 特征衍生后落为明细事实表（DWD），再按"趋势 / 极端 / 分布"等业务主题聚合成统计结果表（ADS），
+> 供上层可视化（show 模块）与建模（forecast 模块）直接读取。
 >
-> ### 第一层：ODS 层（原始数据层 / 明细表）
->
-> - **内容：** 存储从原始数据源（如 CSV 或 API）通过 Spark 清洗入库的每一条气温明细。
->
-> ### 2. 第二层：DWD 层（明细数据层 / 清洗与衍生表）
->
-> - 这一层是对原始数据进行**标准化处理、异常值剔除、缺失值补齐以及特征工程**后的数据。
->
-> ### 3. 第三层：ADS 层（应用数据层 / 统计表）
->
-> - 这一层是专门为Vue 前端展示设计。
+> **注意**：时序预测（谐波回归等）见 [`../forecast/README.md`](../forecast/README.md)。
 
-- ODS层
+## 一、模块定位与数据流
 
-```SQL
--- ODS 层 原始数据表
-CREATE TABLE `weather_data` (
-  `id` VARCHAR(64) NOT NULL COMMENT '原始记录ID',
-  `city_name` VARCHAR(50) NOT NULL COMMENT '城市名称',
-  `avg_temp` DOUBLE COMMENT '当天平均气温',
-  `min_temp` DOUBLE COMMENT '当天最低气温',
-  `max_temp` DOUBLE COMMENT '当天最高气温',
-  `province` VARCHAR(50) COMMENT '所属省份',
-  `date_key` VARCHAR(10) COMMENT '原始日期字符串',
-  `area_code` VARCHAR(20) COMMENT '行政区划代码',
-  PRIMARY KEY (`id`),
-  INDEX `idx_date` (`date_key`),      -- 针对日期建立索引，大幅提升查询统计速度
-  INDEX `idx_city` (`city_name`)      -- 针对城市建立索引
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='呼和浩特市气象监测数据表';
+```
+ 原始数据(Excel/CSV/API)──入库──▶ MySQL: weather_data        (ODS 原始明细)
+                                        │
+                              Spark ETL  (本模块)
+                                        ▼
+                             MySQL: weather_dwd               (DWD 清洗+特征)
+                                        │
+                              Spark 多维聚合
+                                        ▼
+   ads_weather_trend_year / ads_weather_trend_month           (ADS 趋势)
+   ads_weather_extreme                                        (ADS 极端)
+   ads_weather_range_distribution                             (ADS 日较差分布)
+   ads_weather_kpi_metrics                                    (ADS 首页 KPI)
+   ads_diurnal_monthly                                        (ADS 月度日较差)
+                                        │
+                    ┌───────────────────┴───────────────────┐
+                    ▼                                       ▼
+             show 模块（Spring Boot + Vue 大屏）      forecast 模块（谐波回归预测）
 ```
 
-- DWD层
+## 二、技术栈与环境
 
-```SQL
--- DWD 层（明细数据层 / 清洗与衍生表）清洗数据表
-CREATE TABLE `weather_dwd` (
-  `id` VARCHAR(64) NOT NULL PRIMARY KEY COMMENT '原始记录ID',
-  `city_name` VARCHAR(50) NOT NULL COMMENT '城市名称',
-  `record_date` DATE NOT NULL COMMENT '标准清洗日期',
-  `avg_temp` DOUBLE COMMENT '平均气温',
-  `min_temp` DOUBLE COMMENT '最低气温',
-  `max_temp` DOUBLE COMMENT '最高气温',
-  `daily_range` DOUBLE COMMENT '气温日较差',
-  `season` VARCHAR(10) COMMENT '季节',
-  INDEX `idx_date` (`record_date`),
-  INDEX `idx_city` (`city_name`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='DWD层: 清洗后气象事实表';
+| 项 | 值 |
+|---|---|
+| 语言 | Scala 2.12.18 |
+| 计算引擎 | Apache Spark 3.5.1（本地 `local[*]` 调试模式） |
+| Hadoop | 3.3.6 |
+| 存储 | MySQL（JDBC 直读直写，无需中间文件） |
+| 构建 | Maven（`org.xbx:weatherStatistic:1.0-SNAPSHOT`） |
+
+## 三、目录结构
+
+```
+statistic/
+├── pom.xml
+└── src/main/
+    ├── java/elt/
+    │   ├── job/WeatherEtlJob.scala        # 主任务：编排 ODS→DWD→ADS 全流程
+    │   ├── processor/
+    │   │   ├── WeatherProcessor.scala      # 清洗与特征工程（ODS→DWD）
+    │   │   └── AdsProcessor.scala          # 多维统计（DWD→ADS 各主题表）
+    │   └── utils/mysql/
+    │       ├── ReadMysql.scala             # JDBC 读取工具
+    │       └── WriteMysql.scala            # JDBC 写入 / TRUNCATE 工具
+    └── resources/db.properties             # 数据库连接配置（密码走环境变量）
 ```
 
-- ADS层
+## 四、三层数仓设计
 
-```SQL
--- ADS 层（应用数据层 / 统计表）
--- 1. 趋势分析表
-CREATE TABLE `ads_weather_trend_year` (
-  `year` INT COMMENT '年份',
-  `avg_temp` DOUBLE COMMENT '年平均气温',
-  `min_temp` DOUBLE COMMENT '年最低气温极值',
-  `max_temp` DOUBLE COMMENT '年最高气温极值',
-  `avg_daily_range` DOUBLE COMMENT '年平均日较差'
-) COMMENT 'ADS层: 年度气温趋势分析表';
+### 1. ODS 层 —— 原始数据明细表 `weather_data`
 
-CREATE TABLE `ads_weather_trend_month` (
-  `month_dimension` VARCHAR(10) COMMENT '年月（如: 2026-06）',
-  `avg_temp` DOUBLE COMMENT '月平均气温',
-  `min_temp` DOUBLE COMMENT '月最低气温极值',
-  `max_temp` DOUBLE COMMENT '月最高气温极值',
-  `avg_daily_range` DOUBLE COMMENT '月平均日较差'
-) COMMENT 'ADS层: 月度气温趋势分析表';
+按原始记录逐条落库，保留日期字符串、城市、温度等原始字段，不做业务加工。
 
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| id | VARCHAR(64) | 原始记录 ID（主键） |
+| city_name | VARCHAR(50) | 城市（本项目为"呼和浩特市"） |
+| avg_temp / min_temp / max_temp | DOUBLE | 当日平均 / 最低 / 最高气温 |
+| province | VARCHAR(50) | 所属省份 |
+| date_key | VARCHAR(10) | 原始日期字符串（yyyyMMdd） |
+| area_code | VARCHAR(20) | 行政区划代码 |
 
--- 极端气温统计表
-CREATE TABLE ads_weather_extreme (
-    year INT COMMENT '发生极端天气的年份',
-    month INT COMMENT '发生极端天气的月份',
-    extreme_type VARCHAR(20) COMMENT '极端天气类型（EXTREME_HIGH/EXTREME_LOW）',
-    occurrence_count INT COMMENT '该时段内符合标准的总天数',
-    threshold_value DOUBLE COMMENT '极端气温判定阈值'
-) COMMENT '极端气温发生频次与分布统计表';
+索引：`idx_date(date_key)`、`idx_city(city_name)` 加速统计查询。
 
--- 日较差分布表
-CREATE TABLE ads_weather_range_distribution (
-    range_bucket VARCHAR(20) COMMENT '日较差数值区间（如: 0-5℃, 5-10℃ 等）',
-    year INT COMMENT '统计年份',
-    cnt BIGINT COMMENT '落入该区间的总天数'
-) COMMENT '气温日较差波动特征分布表';
+### 2. DWD 层 —— 清洗后明细事实表 `weather_dwd`
+
+对 ODS 做**类型转换 → 规则过滤 → 全局 IQR 离群剔除 → 特征衍生**后得到逐日事实表，
+是本模块后续所有统计与 forecast 建模的数据基础。
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| id | VARCHAR(64) | 原始记录 ID（主键） |
+| city_name | VARCHAR(50) | 城市 |
+| record_date | DATE | 标准清洗日期 |
+| avg_temp / min_temp / max_temp | DOUBLE | 清洗后气温 |
+| daily_range | DOUBLE | 气温日较差 = max − min（衍生） |
+| season | VARCHAR(10) | 季节标签（衍生：3-5 春 / 6-8 夏 / 9-11 秋 / 12-2 冬） |
+
+**清洗规则**（`WeatherProcessor.scala`）：
+1. 类型转换：`date_key` → `record_date`（DATE），温度列转 DOUBLE；
+2. 业务规则：温度非空 且 `max_temp >= min_temp`；
+3. 物理合理区间：`min_temp >= -50` 且 `max_temp <= 60`；
+4. **IQR 离群剔除**：对 min/max/avg 三列分别求全局 Q1/Q3 与 IQR，剔除超出
+   `[Q1 − 1.5·IQR, Q3 + 1.5·IQR]` 的记录（`percentile_approx` 近似分位，精度 100）。
+
+### 3. ADS 层 —— 应用统计表（面向可视化）
+
+| 表名 | 主题 | 主要字段与口径 |
+|---|---|---|
+| `ads_weather_trend_year` | 年趋势 | year；avg_temp=年均温(avg)；min/max_temp=全年最低/最高极值(min/max)；avg_daily_range=年平均日较差 |
+| `ads_weather_trend_month` | 月趋势 | month_dimension(yyyy-MM)；avg/min/max_temp、avg_daily_range 同上年/月口径 |
+| `ads_weather_extreme` | 极端天气 | year, month, season, extreme_type(EXTREME_HIGH/LOW), occurrence_count, avg_intensity, threshold_value |
+| `ads_weather_range_distribution` | 日较差分布 | range_bucket(0-5/5-10/10-15/>15℃), year, cnt（每年落入各区间的天数） |
+| `ads_weather_kpi_metrics` | 首页 KPI | avg_all(多年平均气温), high_threshold(高温阈值 P95), low_threshold(低温阈值 P5), avg_range_all(平均日较差) |
+| `ads_diurnal_monthly` | 月度日较差 | month_dimension, avg/max/min_daily_range, std_daily_range |
+
+> ⚠️ 消费说明：show 侧趋势 / 极端 / 分布 / KPI 接口分别读上述 ADS 表；
+> 但"月度日较差 / 季节箱线 / 日较差-气温相关性"等接口（`WeatherDwdMapper`）
+> 当前**直接基于 `weather_dwd` 用 SQL 现场聚合**，未读取 `ads_diurnal_monthly`。
+> 该 ADS 表保留作"预聚合 + 明细灵活查询"两种口径并存的设计，文档与代码以此为准。
+
+## 五、ADS 统计口径与业务含义
+
+### 1. 趋势分析
+- **年 / 月趋势**：按年（月）对 DWD 分组，`avg(avg_temp)`、`min(min_temp)`、`max(max_temp)`、`avg(daily_range)`。
+- **距平（Anomaly）**：可视化侧用"某年平均值 − 气候基线（全局均值）"度量冷暖偏离 —— 为正表示比历史平均热，为负表示偏冷（前端计算，见 show 模块）。
+
+### 2. 极端天气（`calcExtremeAdvanced`）
+1. **阈值**：`percentile_approx(max_temp, 0.95)` 定高温阈值，`percentile_approx(min_temp, 0.05)` 定低温阈值（全局分位，精度 10000）；
+2. **判定与打标**：`max_temp >= P95` → `EXTREME_HIGH`；`min_temp <= P5` → `EXTREME_LOW`；
+3. **偏差（强度）**：高温偏差 = `当日最高温 − 高温阈值`；低温偏差 = `低温阈值 − 当日最低温`（保证均为正数，统一表示"偏离程度"）；
+4. **聚合**：按 year / month / season / extreme_type 统计 `occurrence_count`、`avg_intensity`，并记录 `threshold_value`。
+
+### 3. 日较差分布（`calcDistribution`）
+- 物理意义：日较差（DTR）= 一日最高与最低气温之差，是衡量气候稳定性与天气剧烈程度的核心指标：
+  - DTR 小（0-5℃）→ 云量多 / 阴雨连绵；DTR 大（>15℃）→ 晴朗少云、干燥（沙漠 / 高原型气候）；
+  - 某年 `>15℃` 天数显著增加，往往与"极端化 / 干旱化"趋势相关。
+- 分桶映射：`<5→0-5℃`，`<10→5-10℃`，`<15→10-15℃`，`≥15→>15℃`；
+- 聚合：以 `range_bucket × year` 为维度 `count(*)`。
+- 分析结论：呼和浩特日较差常年稳定在 **12-15℃**，不随冷暖季节剧烈收缩，体现大陆性气候的稳定性。
+
+### 4. 月度日较差（`calcDiurnalMonthly`）
+按 `yyyy-MM` 计算 avg / max / min / std 四类日较差统计，用于观察日较差的季节规律与波动幅度。
+
+### 5. 首页 KPI（`calcKpiMetrics`）
+一次汇总四项概览指标：多年平均气温、高温阈值(P95)、低温阈值(P5)、平均日较差。
+
+## 六、运行方式
+
+```bash
+# 1. 数据库配置：statistic/src/main/resources/db.properties
+#    db.url / db.user 直接填写；密码从环境变量读取，避免硬编码：
+#    db.password=${DB_PASSWORD}
+#    Windows:  set DB_PASSWORD=你的密码
+#    Linux:    export DB_PASSWORD=你的密码
+
+# 2. 运行主任务（本地 Spark，local[*]）
+#    在 IDE 中直接运行 elt.job.WeatherEtlJob.main，或：
+mvn package
+#    然后以包含依赖的 classpath 运行 WeatherEtlJob（本地调试时通常用 IDE 更省事）
 ```
 
-## 二、页面
+执行后自动：
+1. `TRUNCATE` 并重建 DWD 与各 ADS 表（先清空再全量写入，保证幂等）；
+2. 从 `weather_data` 读取 ODS → 清洗 → 写 `weather_dwd`；
+3. 从 `weather_dwd` 计算 6 张 ADS 表并写回 MySQL。
 
-### 趋势分析页面
+> 注：`pom.xml` 未配置 scala-maven / shade 打包插件，本地调试以 IDE 运行主类为主；
+> 若需 `spark-submit` 提交，需自行补充打包插件与运行参数。
 
-- 基本年趋势图
-- 月趋势图
-- 气温距平分析图
+## 七、已知口径注意点（面试可主动说明）
 
-> **数据中心化（Centering）**。在气象学和气候科学中，这个计算结果被称为“距平”（Anomaly）。
->
-> #### 1. 算基线：计算全局平均值（`globalAvg`）
->
-> JavaScript`const globalAvg = avgArray.reduce((a, b) => a + b, 0) / avgArray.length;`
->
-> - **逻辑：** 把过去所有年的平均气温加起来，除以总年份数。
-> - **物理意义：** 得到了这 20 年来该地区的**气候基线（整体平均温）**。这是一个单一的标量数值（例如：15.3°C）。
->
-> 用每一个单独一年的平均真实气温（`val`），减去上面算出来的全局平均值（`globalAvg`）。
->
-> **物理意义：** * 如果结果为 **正数**，说明今年比历史平均水平**热**。
->
-> - 如果结果为 **负数**，说明今年比历史平均水平**冷**。
-> - 如果结果接近 **0**，说明今年的气温完全符合历史大盘。
+- **IQR 剔除 vs 极端统计的边界**：DWD 层做了全局 1.5×IQR 离群剔除，而极端天气统计同样建立在 DWD 之上，
+  因此**最极端的真实寒潮/热浪日理论上可能被清洗规则过滤**，极端频次存在轻微低估风险。
+  更严格的做法是"清洗只做业务规则，极端统计在原始 ODS 上做"——作为后续优化方向保留。
+- **阈值口径**：极端阈值采用全局 P95/P5，未区分季节；如需更细粒度可用季节分位数或极值理论（GEV）。
+- 20 年单城市样本属"中长序列小样本"，结论用于趋势观察，统计显著性见 forecast 模块实验（Mann-Kendall 思路）。
 
-- 每月的热力图
-- ​
+## 八、与其他模块的衔接
 
-### 极端数据统计页面
-
-- 各类极端天气年总统计 第一行
-
-
-- 极端天气季节分布玫瑰图 第二行
-- 极端天气季节分布气泡图 第二行
-- 按年聚合偏差强度均值（高温/低温分别一行)
-- 按每月聚合偏差强度
-
-> 日偏差：
->
-> **高温偏差：** `极端当日最高温 - 高温阈值`。
->
-> **低温偏差：** `极端低温阈值 - 当日最低温`（这里用低温阈值减去实际温度，是为了确保偏差值依然为**正数**，保证所有偏差值在统计上都表示“偏离程度”）。
->
-> 年偏差：对日偏差求平均
->
-> 它能展示极端天气极端的程度 偏差越大越极端
-
-### 日差分布统计页面
-
-> **气温日较差（Daily Temperature Range, DTR）”** 指的是一天中最高气温与最低气温的差值。它是衡量一个地区气候稳定性和天气剧烈程度的核心指标。
->
-> **气候特征评估：**
->
-> - **日较差小 (0-5℃)：** 通常意味着当天云量较多（白天云层遮挡阳光，夜晚云层保温），或者处于阴雨连绵的天气。如果一个地区该区间占比高，说明该地气候多雨、阴天多。
-> - **日较差大 (>15℃)：** 通常对应晴朗少云、干燥的天气。白天由于大气透明度高，太阳辐射加热强烈；夜晚由于缺乏云层遮挡，长波辐射散热极快（如沙漠地区或高原地区）。
->
-> **极端天气预警：**
->
-> - 如果某一年 `>15℃` 的天数显著增加，说明该地区当年的天气向“极端化”和“干旱化”发展，这往往与气候变化带来的极端干旱、热浪等事件相关联。
->
-> **生活/行业指导：**
->
-> - **穿衣指数：** 日较差大的日子，早晚温差大，需要“早穿皮袄午穿纱”。
-> - **农业影响：** 对于很多作物，适当的日较差（白天光合作用强，夜间呼吸作用弱）利于糖分积累；但过大的日较差可能导致作物受冻。
->
-> 数据获取:
->
-> 通过 `daily_range = max_temp - min_temp` 计算得到当天的温差。
->
-> 将连续的温差数值（如 3.2, 7.8, 12.5）映射到离散的分类标签中：
->
-> - `< 5℃` $\rightarrow$ `0-5℃`
-> - `< 10℃` $\rightarrow$ `5-10℃`
-> - `< 15℃` $\rightarrow$ `10-15℃`
-> - `>= 15℃` $\rightarrow$ `>15℃`
->
-> **多维聚合 (Aggregation)：**
->
-> 以 `range_bucket`（区间）和 `year`（年份）作为维度，使用 `count(*)` 统计每年落入每个区间的总天数。
-
-- 日差分布年化图 √
-
-
-- 日较差与平均气温散点（相关性分析）√
-
-> - **日较差的独立性**：该地区无论气温高还是低，其昼夜温差通常都维持在 12℃-15℃ 这个区间内。
->
->   **气候稳定性**：这说明该地区的气候特性非常稳定，不像某些地区那样随着季节变暖，昼夜温差会发生剧烈收缩。
-
-- 月度平均日较差（折线图用）√
-- **月度折线** + **季节箱线图**，形成"总量分布 → 时间规律 → 异常识别"的分析链。
-
-### 建模预测
-
-> 气温是一个时序数据我们考虑使用ARIMAX，观察我们的年度气温趋势可以看出，气温具有极强的季节性、周期性。我们加入季节因素使用SARIMAX
->
-> 通过傅里叶变换，我们不再让模型去‘猜’季节，而是直接构建了一组基于 365.25 天周期的傅里叶特征作为外生变量
-
-> 
->
-> SARIMAX 通过 `(p, d, q)`
->
-> `p` 表示模型使用**过去多少个时间步**的数据来预测当前值
->
-> `d`：差分项 (Integrated) —— “平稳视角” 
->
-> - 一阶差分：当前值减去前一个值
->
->
-> - 含义**：`d` 表示为了让序列“平稳”（即均值和方差不随时间剧烈变化），需要对原始数据进行多少次**差分**运算。
->
-> - **含义**：`q` 用过去 q 个**白噪声误差项（即模型预测残差εₜ₋ᵢ）**的线性组合来修正当前预测。比如 q=1：
->
->   yₜ = ... + θ₁·εₜ₋₁ + εₜ
->
->   直觉就是"如果模型昨天预测偏低了（残差为正），那今天的预测可以适当调高一点。
->
-> 我们用aic和bic来找到最优参数
->
-> AIC（赤池信息准则）和BIC（贝叶斯信息准则）都是用来在多个候选模型之间做选择的指标，核心思路是：**既要模型拟合得好（似然大），又不希望模型参数太多（防止过拟合）**，所以在"拟合优度"上加一个"复杂度惩罚项"，数值越小代表模型综合表现越好。
->
-> AIC = 2k − 2ln(L)
->
-> BIC = k·ln(n) − 2ln(L)
->
-> 其中 k 是模型参数个数（SARIMAX里 p+d+q 加上外生变量个数等），L是模型的最大似然值，n是样本量（训练数据的观测点数）。
->
-> 
-
-1. 主要是对未来一年的数据进行预测
-2. 模型为SARIMAX时序预测模型
-
-- **S (Seasonal)**: 季节性。代码中主要通过手动构造的“傅里叶项 (Fourier terms)”来显式建模季节性，但 SARIMAX 框架本身支持处理季节性模式。
-- **AR (AutoRegressive)**: 自回归。利用变量过去的值来预测未来的值（代码中 `order=(2, 0, 2)` 的第一个参数 2 表示使用过去 2 个时间步的值）。
-- **I (Integrated)**: 差分。用于使时间序列平稳（代码中 `order` 的第二个参数 0 表示未进行差分）。
-- **MA (Moving Average)**: 滑动平均。利用过去预测误差的线性组合（代码中 `order` 的第三个参数 2 表示使用过去 2 个预测误差）。
-- **X (eXogenous variables)**: **外生变量**。这是最亮眼的部分，即 `exog=exog` 参数。
-  - 为什么要用外生变量
-  -  注入“领域先验知识” (Domain Knowledge)
-  - ​
-- 如何构造傅里叶变换
-
-> 傅里叶背后的核心思想非常直观：**任何复杂的周期性信号，都可以拆解为一系列简单的正弦波和余弦波的叠加。**
->
-> 核心逻辑**：气温具有极强的年度周期性（365.25天），直接使用季节差分（Seasonal Differencing）容易丢失数据，且难以处理长周期。
->
-> **代码实现**：`np.sin(...)` 和 `np.cos(...)` 构成了谐波函数，通过 `K=4` 叠加了四个频率的三角波。
->
-> **学术意义**：这种方法将复杂的非线性季节性转化为线性的**外生变量 (Exogenous variables)** 喂给模型，使得模型能够轻松捕捉一年四季的温度变化规律，同时保持了极高的物理可解释性。
-
-### 为什么使用了“傅里叶项”作为外生变量？
-
-生成了周期性的正弦（sin）和余弦（cos）组合：
-
-```python
-for k in range(1, K + 1):
-    exog[f'sin{k}'] = np.sin(2 * np.pi * k * doy / 365.25)
-    exog[f'cos{k}'] = np.cos(2 * np.pi * k * doy / 365.25)
-```
-
-这种做法是在**利用傅里叶级数对气温的年度季节性进行建模**。相比于传统的 SARIMA 模型中仅使用差分（Seasonal Differencing）来处理季节性，使用傅里叶项作为外生变量通常具有以下优势：
-
-1. **处理长周期**：如果季节性周期很长（比如 365 天），普通的季节性差分会导致数据大量丢失，而傅里叶项可以非常平滑地拟合这种波动。
-2. **灵活性**：通过调整 `K` 值（谐波阶数），你可以控制拟合曲线的复杂度，从而捕捉更精细的季节性特征。
-
-### 模型预测得出的结论
-
-### 模型表现与拟合度
-
-- **趋势拟合稳健**：SARIMAX 模型生成的预测曲线（橙色线）平滑且准确地捕捉到了全年的年度周期性（Seasonal Pattern）。这验证了你通过傅里叶项对季节性建模的思路是非常成功的，它有效地平滑了气温变化的宏观走势。
-- **置信区间覆盖能力**：阴影区域代表了模型的置信区间。从图表看，大部分真实的波动值（蓝色曲线）都处于置信区间内，说明模型对气温的波动范围有较好的预判能力。
-
-### 模型局限性（挑战点）
-
-- **短期波动捕获不足**：蓝色的真实值曲线在局部呈现出频繁的高频抖动（如在 1 月、2 月及 11 月、12 月），而橙色的预测曲线由于是基于趋势和季节性的统计拟合，无法对这些短期剧烈的气温突变做出精细化跟踪。
-- **极端偏差实例**：在图中 tooltip 显示的 2024-01-24 数据点中，真实值为 -16℃，而预测值为 -10.26℃。这存在约 5.74℃ 的误差。这说明在冬季极端寒潮或气温骤降事件中，纯统计学模型（SARIMAX）可能会倾向于输出该时段的历史统计平均水平，而对短期的极端降温响应滞后。
+| 下游 | 读取内容 | 用途 |
+|---|---|---|
+| `show/` | ADS 趋势/极端/分布/KPI 表、`weather_dwd`、`weather_data` | 大屏可视化接口（见 show 模块） |
+| `forecast/` | `weather_dwd` 导出 CSV | 谐波回归长期预测 / 气候态+异常AR(1) 短期预测 |

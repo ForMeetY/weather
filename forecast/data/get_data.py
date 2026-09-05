@@ -6,7 +6,7 @@ from sqlalchemy import create_engine
 # 1. 数据库配置
 # 格式: mysql+pymysql://用户名:密码@主机IP:端口/数据库名
 # 密码从环境变量 DB_PASSWORD 读取，避免硬编码泄露
-db_password = os.environ.get("DB_PASSWORD", "your_password")
+db_password = os.environ.get("DB_PASSWORD", "1234")
 db_connection_str = f'mysql+pymysql://root:{db_password}@localhost:3306/weatherdb'
 db_connection = create_engine(db_connection_str)
 

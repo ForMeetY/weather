@@ -5,7 +5,7 @@ spring:
     url: jdbc:mysql://localhost:3306/weatherdb?useUnicode=true&characterEncoding=utf-8&useSSL=false&allowPublicKeyRetrieval=true&zeroDateTimeBehavior=convertToNull&transformedBitIsBoolean=true&allowMultiQueries=true
     driver-class-name: com.mysql.cj.jdbc.Driver
     username: root
-    password: ${DB_PASSWORD:}
+    password: 1234
 
 
 mybatis: # 或者 mybatis: 如果你没用 Plus 的特有功能
@@ -15,10 +15,6 @@ mybatis: # 或者 mybatis: 如果你没用 Plus 的特有功能
   configuration:
     log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
     map-underscore-to-camel-case: true
-
-deepseek:
-  api-key: ${DEEPSEEK_API_KEY:}
-
 
 server:
   port: 8080

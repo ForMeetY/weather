@@ -3,7 +3,7 @@ import re
 from datetime import datetime, timedelta
 
 # 读取数据
-file_path = r"F:\Users\肖炳旭\Desktop\动手学机器学习\期末复习\天气预报_202401-202412.xlsx"
+file_path = r"原始数据位置"  # 表格
 df = pd.read_excel(file_path, engine="openpyxl", header=None)
 
 
