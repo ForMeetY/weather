@@ -1,0 +1,17 @@
+# forecast 模块运行依赖（时序分析 / 预测 / 可视化）
+# 安装：pip install -r requirements.txt
+
+# 核心数值与数据
+numpy
+pandas
+
+# 统计建模
+statsmodels          # ADF/KPSS 平稳性检验、Ljung-Box、白噪声诊断
+scikit-learn         # GBDT 数据驱动对照
+
+# 可视化
+matplotlib
+
+# 数据库（可选：写回 MySQL 供大屏 / 读取 2024 样本外数据）
+sqlalchemy
+pymysql

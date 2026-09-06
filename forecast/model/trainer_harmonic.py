@@ -7,11 +7,11 @@ trainer_harmonic.py —— 呼和浩特日均气温预测（名实相符的新�
      模型：avg_temp = a + b·(t/365.25) + Σ_k [α_k·sin(2πk·doy/365.25) + β_k·cos(2πk·doy/365.25)] + ε
      即"线性年趋势 + K 阶傅里叶季节谐波"的最小二乘回归。
      评估(2022-2023 测试段)：MAE 3.168℃ / RMSE 4.019℃，优于原 ARIMAX+Fourier(3.182)。
-  2) 短期预测(1~30天)：**气候态 + 异常AR(1)**（climatology + anomaly AR(1)）
-     依据：ACF(1)=0.973 → "昨日距平"对明日有强预测力；滚动 1 步 MAE 2.23℃。
+  2) 短期预测(1~30天)：**气候态 + 异常AR(3)**（climatology + anomaly AR(3)）
+     依据：ACF(1)=0.973 → "昨日距平"对明日有强预测力；滚动 1 步 MAE 2.194℃。
 
 术语口径：本脚本不再使用 "SARIMAX" 名称 —— 原代码未设置季节差分(seasonal_order)，
-实际为 ARIMAX+傅里叶外生项；此处长期方案改为纯谐波回归(OLS)，短期方案为气候态+AR(1)。
+实际为 ARIMAX+傅里叶外生项；此处长期方案改为纯谐波回归(OLS)，短期方案为气候态+AR(3)。
 
 用法：
     python trainer_harmonic.py            # 只训练+评估+画图+存CSV
@@ -95,11 +95,23 @@ ax.set_title("谐波回归长期预测 vs 真实 (2022-2023 留出测试段)")
 ax.legend(); ax.grid(alpha=0.3); ax.set_ylabel("气温(℃)")
 fig.tight_layout(); fig.savefig(IMG / "harmonic_eval_2022_2023.png", dpi=150); plt.close(fig)
 
-# ================= 4. 短期方案：气候态 + 异常 AR(1) =================
+# ================= 4. 短期方案：气候态 + 异常 AR(3) =================
 clim = tr.groupby(tr["record_date"].dt.strftime("%m-%d"))["avg_temp"].mean()
 anom_tr = tr["avg_temp"].values - clim.reindex(tr["record_date"].dt.strftime("%m-%d")).values
-phi = np.sum(anom_tr[1:] * anom_tr[:-1]) / np.sum(anom_tr[:-1] ** 2)
-print(f"[异常AR(1)] φ={phi:.3f}  (滚动1步测试 MAE 2.23℃ 见实验报告)")
+
+
+def fit_ar_ols(series, p):
+    """对平稳异常序列做 AR(p) 最小二乘拟合，返回 φ 系数"""
+    n = len(series)
+    X = np.column_stack([series[p - 1 - i: n - 1 - i] for i in range(p)])
+    phi, *_ = np.linalg.lstsq(X, series[p:], rcond=None)
+    return phi
+
+
+P = 3  # AR 阶数（跨城市定阶实验选定，见 experiments/ar_order_final.py）
+phi = fit_ar_ols(anom_tr, P)
+print(f"[异常AR({P})] " + ", ".join(f"φ{i+1}={v:.3f}" for i, v in enumerate(phi))
+      + "  (滚动1步测试 MAE 2.194℃ 见实验报告)")
 
 # ================= 5. 全量训练并预测未来 730 天（写 MySQL 与 CSV） =================
 print("\n[全量训练 2004-2023 → 预测未来 730 天]")
@@ -156,4 +168,4 @@ if pw:
 else:
     print("[MySQL] 未设置 DB_PASSWORD，跳过写库（仅存 CSV）")
 
-print("\n[完成] 长期=谐波回归 K=3 | 短期=气候态+异常AR(1) —— 术语口径已与实验报告一致")
+print("\n[完成] 长期=谐波回归 K=3 | 短期=气候态+异常AR(3) —— 术语口径已与实验报告一致")
